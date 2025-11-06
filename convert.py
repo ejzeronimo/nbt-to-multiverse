@@ -872,18 +872,28 @@ def convert_player_file(player_filename, mv_world='world', output_dir=None):
 
     player_uuid = _uuid_from_player(player)
 
-    output_base = Path(output_dir) if output_dir else player_path.parent
-    output_base.mkdir(parents=True, exist_ok=True)
+    output_root = Path(output_dir) if output_dir else Path('out')
+    players_dir = output_root / 'players'
+    groups_dir = output_root / 'groups' / mv_world
+    worlds_dir = output_root / 'worlds' / mv_world
 
-    outputs = {}
+    players_dir.mkdir(parents=True, exist_ok=True)
+    groups_dir.mkdir(parents=True, exist_ok=True)
+    worlds_dir.mkdir(parents=True, exist_ok=True)
+
+    outputs = {'root': output_root}
     if name:
-        name_path = output_base / f"{name}.json"
-        with name_path.open('w') as out_file:
+        group_path = groups_dir / f"{name}.json"
+        with group_path.open('w') as out_file:
             json.dump(json_data, out_file)
-        outputs['name_path'] = name_path
+        world_path = worlds_dir / f"{name}.json"
+        with world_path.open('w') as out_file:
+            json.dump(json_data, out_file)
+        outputs['group_path'] = group_path
+        outputs['world_path'] = world_path
 
     if player_uuid:
-        uuid_path = output_base / f"{player_uuid}.json"
+        uuid_path = players_dir / f"{player_uuid}.json"
         uuid_payload = {
             "playerData": {
                 "lastWorld": mv_world,
@@ -902,6 +912,32 @@ def convert_player_file(player_filename, mv_world='world', output_dir=None):
     return outputs
 
 
+def collect_player_files(paths):
+    files = []
+    seen = set()
+    for entry in paths:
+        path = Path(entry)
+        if path.is_dir():
+            candidates = []
+            for pattern in ('*.dat', '*.nbt'):
+                candidates.extend(sorted(path.rglob(pattern)))
+        else:
+            if not path.exists():
+                raise FileNotFoundError(f'Path does not exist: "{path}"')
+            candidates = [path]
+        if not candidates:
+            raise FileNotFoundError(f'No player files found in "{path}"')
+        for candidate in candidates:
+            if not candidate.is_file():
+                continue
+            resolved = candidate.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            files.append(candidate)
+    return files
+
+
 def main(player_filenames, mv_world='world', output_dir=None):
     results = []
     for filename in player_filenames:
@@ -917,17 +953,36 @@ def test():
 
 def cli():
     parser = argparse.ArgumentParser(description='Convert player data NBT into Multiverse JSON format.')
-    parser.add_argument('player_dat', nargs='+', help='Path(s) to player .dat files')
+    parser.add_argument('player_dat', nargs='+', help='Path(s) to player .dat/.nbt files or directories containing them')
     parser.add_argument('-w', '--world', default='world', help='Multiverse world name (default: world)')
     parser.add_argument('-o', '--output-dir', help='Directory to place generated JSON files')
     args = parser.parse_args()
-    results = main(args.player_dat, args.world, args.output_dir)
+    try:
+        player_files = collect_player_files(args.player_dat)
+    except FileNotFoundError as exc:
+        parser.error(str(exc))
+    if not player_files:
+        parser.error('No player files were found to convert.')
+
+    results = main(player_files, args.world, args.output_dir)
     for result in results:
         created = []
-        if result.get('name_path'):
-            created.append(result['name_path'].name)
-        if result.get('uuid_path'):
-            created.append(result['uuid_path'].name)
+        root = result.get('root')
+
+        def rel(path):
+            if not path:
+                return None
+            try:
+                if root:
+                    return path.relative_to(root)
+            except ValueError:
+                pass
+            return path
+
+        for key in ('group_path', 'world_path', 'uuid_path'):
+            path = result.get(key)
+            if path:
+                created.append(str(rel(path)))
         created_str = ', '.join(created) if created else 'no files'
         print(f"Converted {result['source']} -> {created_str}")
 

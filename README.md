@@ -12,13 +12,20 @@ pip install nbt
 
 ## Usage:
 ```
-python ./convert.py [-w MVWorld] [-o OUTPUT_DIR] <player.dat> [<player.dat> ...]
+python ./convert.py [-w MVWorld] [-o OUTPUT_ROOT] <player.dat> [<player.dat> ...]
 ```
-**player.dat** - Filename(s) of saved minecraft player state in [nbt format](https://minecraft.wiki/w/Player.dat_format) to be converted.<br/>
+**player.dat** - Filename(s) or directories containing saved minecraft player state in [nbt format](https://minecraft.wiki/w/Player.dat_format); directories are scanned recursively for `.dat`/`.nbt` files.<br/>
 **MVWorld** - Multiverse world(overworld) name. 'world' by default<br/>
-**OUTPUT_DIR** - Optional directory to place the generated `.json` files (defaults to the same directory as the `.dat` file).
+**OUTPUT_ROOT** - Optional directory to place the generated structure (defaults to `./out`).
 
-For each player the converter now produces both `<lastKnownName>.json` (full inventory data) and `<uuid>.json` (a short `playerData` wrapper pointing Multiverse-Inventories at the correct world/name).
+For each player the converter now produces both `<lastKnownName>.json` (full inventory data under `groups/<world>/` and `worlds/<world>/`) and `<uuid>.json` (a short `playerData` wrapper under `players/`). The layout matches:
+
+```
+out/
+  groups/<world>/<lastKnownName>.json
+  worlds/<world>/<lastKnownName>.json
+  players/<uuid>.json
+```
 
 ## Known issues:
 See TODOs in convert.py<br/>
