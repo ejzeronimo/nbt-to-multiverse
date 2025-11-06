@@ -18,7 +18,7 @@ python ./convert.py [-w MVWorld] [-o OUTPUT_DIR] <player.dat> [<player.dat> ...]
 **MVWorld** - Multiverse world(overworld) name. 'world' by default<br/>
 **OUTPUT_DIR** - Optional directory to place the generated `.json` files (defaults to the same directory as the `.dat` file).
 
-For each player the converter now produces both `<lastKnownName>.json` and `<uuid>.json`, matching Multiverse-Inventories' expectations.
+For each player the converter now produces both `<lastKnownName>.json` (full inventory data) and `<uuid>.json` (a short `playerData` wrapper pointing Multiverse-Inventories at the correct world/name).
 
 ## Known issues:
 See TODOs in convert.py<br/>

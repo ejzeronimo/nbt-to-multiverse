@@ -707,7 +707,7 @@ def serialize_item_stack(item_tag):
 
 def serialize_player_nbt(player_nbt, mv_world):
     # https://github.com/Multiverse/Multiverse-Inventories/blob/main/src/main/java/com/onarandombox/multiverseinventories/share/Sharables.java
-    game_mode = GAME_MODES[player_nbt['playerGameType'].value]
+    output_game_mode = 'SURVIVAL'
 
     def valuestr_or(default, *names):
         for name in names:
@@ -717,7 +717,7 @@ def serialize_player_nbt(player_nbt, mv_world):
 
     # Build default empty json structure
     json_data = {
-        game_mode: {
+        output_game_mode: {
             'inventoryContents': {},
             'offHandItem': {
                 "==": "org.bukkit.inventory.ItemStack",
@@ -735,11 +735,11 @@ def serialize_player_nbt(player_nbt, mv_world):
     for tag in player_nbt['Inventory']:
         slot = tag['Slot'].value
         if slot >= 100:
-            json_data[game_mode]['armorContents'][str(slot - 100)] = serialize_item_stack(tag)
+            json_data[output_game_mode]['armorContents'][str(slot - 100)] = serialize_item_stack(tag)
         elif slot == -106:
-            json_data[game_mode]['offHandItem'] = serialize_item_stack(tag)
+            json_data[output_game_mode]['offHandItem'] = serialize_item_stack(tag)
         else:
-            json_data[game_mode]['inventoryContents'][str(slot)] = serialize_item_stack(tag)
+            json_data[output_game_mode]['inventoryContents'][str(slot)] = serialize_item_stack(tag)
 
     if 'equipment' in player_nbt:
         equipment = player_nbt['equipment']
@@ -751,13 +751,13 @@ def serialize_player_nbt(player_nbt, mv_world):
         }
         for key, idx in armor_slot_map.items():
             if key in equipment:
-                json_data[game_mode]['armorContents'][idx] = serialize_item_stack(equipment[key])
+                json_data[output_game_mode]['armorContents'][idx] = serialize_item_stack(equipment[key])
         if 'off_hand' in equipment:
-            json_data[game_mode]['offHandItem'] = serialize_item_stack(equipment['off_hand'])
+            json_data[output_game_mode]['offHandItem'] = serialize_item_stack(equipment['off_hand'])
 
     # Parse Ender chest
     for tag in player_nbt['EnderItems']:
-        json_data[game_mode]['enderChestContents'][str(tag['Slot'].value)] = serialize_item_stack(tag)
+        json_data[output_game_mode]['enderChestContents'][str(tag['Slot'].value)] = serialize_item_stack(tag)
 
     dimensions = {
         'minecraft:overworld': '',
@@ -766,7 +766,7 @@ def serialize_player_nbt(player_nbt, mv_world):
     }
 
     # Parse last location
-    json_data[game_mode]['lastLocation'] = {
+    json_data[output_game_mode]['lastLocation'] = {
         '==': 'org.bukkit.Location',
         'world': mv_world + dimensions[player_nbt['Dimension'].value],
         'x': player_nbt['Pos'][0].value,
@@ -804,21 +804,21 @@ def serialize_player_nbt(player_nbt, mv_world):
     if spawn_location is None:
         spawn_location = {
             '==': 'org.bukkit.Location',
-            'world': json_data[game_mode]['lastLocation']['world'],
-            'x': json_data[game_mode]['lastLocation']['x'],
-            'y': json_data[game_mode]['lastLocation']['y'],
-            'z': json_data[game_mode]['lastLocation']['z'],
+            'world': json_data[output_game_mode]['lastLocation']['world'],
+            'x': json_data[output_game_mode]['lastLocation']['x'],
+            'y': json_data[output_game_mode]['lastLocation']['y'],
+            'z': json_data[output_game_mode]['lastLocation']['z'],
             'pitch': 0,
-            'yaw': json_data[game_mode]['lastLocation']['yaw'],
+            'yaw': json_data[output_game_mode]['lastLocation']['yaw'],
         }
-    json_data[game_mode]['bedSpawnLocation'] = spawn_location
+    json_data[output_game_mode]['bedSpawnLocation'] = spawn_location
 
     # Parse potion effects
     if 'ActiveEffects' in player_nbt:
-        json_data[game_mode]['potions'] = [serialize_potion_effect(effect) for effect in player_nbt['ActiveEffects']]
+        json_data[output_game_mode]['potions'] = [serialize_potion_effect(effect) for effect in player_nbt['ActiveEffects']]
 
     # Parse stats
-    json_data[game_mode]['stats'] = {
+    json_data[output_game_mode]['stats'] = {
         'ex': valuestr_or('0', 'foodExhaustionLevel'),  # Float
         'ma': '300',  # Integer (max air)
         'fl': valuestr_or('0', 'foodLevel'),  # Integer
@@ -884,8 +884,15 @@ def convert_player_file(player_filename, mv_world='world', output_dir=None):
 
     if player_uuid:
         uuid_path = output_base / f"{player_uuid}.json"
+        uuid_payload = {
+            "playerData": {
+                "lastWorld": mv_world,
+                "lastKnownName": name or "",
+                "loadOnLogin": False,
+            }
+        }
         with uuid_path.open('w') as out_file:
-            json.dump(json_data, out_file)
+            json.dump(uuid_payload, out_file)
         outputs['uuid_path'] = uuid_path
 
     outputs['source'] = player_path
