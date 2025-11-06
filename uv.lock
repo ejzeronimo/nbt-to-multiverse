@@ -1,0 +1,23 @@
+version = 1
+revision = 2
+requires-python = ">=3.12"
+
+[[package]]
+name = "nbt"
+version = "1.5.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/7a/89/b45d1a3608d0335f0cb6f715dc0363a976981c6b94625de9f4d95417e1b4/NBT-1.5.1.tar.gz", hash = "sha256:da3bb2137605cb9dfe7446f13f19b3ae7faf920d430a387fb78efde27f6636c5", size = 122703, upload-time = "2021-12-22T15:48:31.703Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b9/ae/f3bdbbaccaca97a2bfdd87466a08717a2174f136e3b99a189d32d03d6526/NBT-1.5.1-py2.py3-none-any.whl", hash = "sha256:1503314d0374b983642f9f219890330ce19d9d85966a28bdb6bef1fb17c4c2c0", size = 25601, upload-time = "2021-12-22T15:46:34.546Z" },
+]
+
+[[package]]
+name = "nbt-to-multiverse"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "nbt" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "nbt", specifier = ">=1.5.1" }]

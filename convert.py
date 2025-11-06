@@ -1,16 +1,16 @@
-import sys
+import argparse
 import io
 import json
 import base64
 
-import nbt
+from nbt import nbt as nbtlib
 
 # https://minecraft.wiki/w/Item_format
 # https://hub.spigotmc.org/stash/projects/SPIGOT/repos/bukkit/
 # https://hub.spigotmc.org/stash/projects/SPIGOT/repos/craftbukkit/
 # https://github.com/Multiverse/Multiverse-Inventories/
 
-BUKKIT_VERSION = 3465
+BUKKIT_VERSION = 4556
 GAME_MODES = ('SURVIVAL', 'CREATIVE', 'ADVENTURE', 'SPECTATOR')
 
 # https://hub.spigotmc.org/stash/projects/SPIGOT/repos/craftbukkit/browse/src/main/java/org/bukkit/craftbukkit/inventory/CraftMetaItem.java#1394
@@ -36,6 +36,135 @@ HANDLED_TAGS = (
     'Items',  # Meta Bundle
     'instrument',  # Meta Music Instrument
 )
+
+
+def _build_enchantment_list(component_tag, name):
+    enchant_list = nbtlib.TAG_List(type=nbtlib.TAG_Compound, name=name)
+    for enchant_id, level_tag in component_tag.items():
+        enchant = nbtlib.TAG_Compound()
+        enchant['id'] = nbtlib.TAG_String(enchant_id)
+        enchant['lvl'] = nbtlib.TAG_Short(level_tag.value)
+        enchant_list.append(enchant)
+    return enchant_list
+
+
+def convert_fireworks_component(component_tag):
+    fireworks = nbtlib.TAG_Compound()
+    if 'flight_duration' in component_tag:
+        fireworks['Flight'] = nbtlib.TAG_Byte(component_tag['flight_duration'].value)
+    if 'explosions' in component_tag and len(component_tag['explosions']) > 0:
+        explosions_list = nbtlib.TAG_List(type=nbtlib.TAG_Compound, name='Explosions')
+        for explosion in component_tag['explosions']:
+            explosion_tag = nbtlib.TAG_Compound()
+            if 'shape' in explosion:
+                shape = explosion['shape'].value
+                shapes = {
+                    'small_ball': 0,
+                    'large_ball': 1,
+                    'star': 2,
+                    'creeper': 3,
+                    'burst': 4,
+                }
+                if shape in shapes:
+                    explosion_tag['Type'] = nbtlib.TAG_Byte(shapes[shape])
+            if 'has_trail' in explosion:
+                explosion_tag['Trail'] = nbtlib.TAG_Byte(1 if bool(explosion['has_trail'].value) else 0)
+            if 'has_twinkle' in explosion:
+                explosion_tag['Flicker'] = nbtlib.TAG_Byte(1 if bool(explosion['has_twinkle'].value) else 0)
+            if 'colors' in explosion and len(explosion['colors']) > 0:
+                colors_list = nbtlib.TAG_List(type=nbtlib.TAG_Int, name='Colors')
+                for color in explosion['colors']:
+                    colors_list.append(nbtlib.TAG_Int(color.value))
+                explosion_tag['Colors'] = colors_list
+            if 'fade_colors' in explosion and len(explosion['fade_colors']) > 0:
+                fade_list = nbtlib.TAG_List(type=nbtlib.TAG_Int, name='FadeColors')
+                for color in explosion['fade_colors']:
+                    fade_list.append(nbtlib.TAG_Int(color.value))
+                explosion_tag['FadeColors'] = fade_list
+            explosions_list.append(explosion_tag)
+        fireworks['Explosions'] = explosions_list
+    return fireworks
+
+
+def normalize_item_tag(item_tag, slot=None):
+    normalized = nbtlib.TAG_Compound()
+
+    slot_value = None
+    if slot is not None:
+        slot_value = slot
+    elif 'Slot' in item_tag:
+        slot_value = item_tag['Slot'].value
+    if slot_value is not None:
+        normalized['Slot'] = nbtlib.TAG_Byte(slot_value)
+
+    if 'id' in item_tag:
+        normalized['id'] = nbtlib.TAG_String(item_tag['id'].value)
+
+    count_value = 1
+    if 'Count' in item_tag:
+        count_value = item_tag['Count'].value
+    elif 'count' in item_tag:
+        count_value = item_tag['count'].value
+    normalized['Count'] = nbtlib.TAG_Byte(count_value)
+
+    if 'tag' in item_tag:
+        normalized['tag'] = item_tag['tag']
+    elif 'components' in item_tag:
+        legacy_tag = components_to_legacy_tag(item_tag['components'], normalized.get('id').value if 'id' in normalized else None)
+        if len(legacy_tag) > 0:
+            normalized['tag'] = legacy_tag
+
+    return normalized
+
+
+def components_to_legacy_tag(components_tag, item_id=None):
+    legacy = nbtlib.TAG_Compound()
+    if not isinstance(components_tag, nbtlib.TAG_Compound):
+        return legacy
+
+    if 'minecraft:enchantments' in components_tag:
+        enchant_component = components_tag['minecraft:enchantments']
+        if isinstance(enchant_component, nbtlib.TAG_List):
+            enchant_list = nbtlib.TAG_List(type=nbtlib.TAG_Compound, name='Enchantments')
+            for entry in enchant_component:
+                enchant = nbtlib.TAG_Compound()
+                enchant['id'] = nbtlib.TAG_String(entry['enchantment'].value)
+                enchant['lvl'] = nbtlib.TAG_Short(entry['level'].value)
+                enchant_list.append(enchant)
+            legacy['Enchantments'] = enchant_list
+        else:
+            legacy['Enchantments'] = _build_enchantment_list(enchant_component, 'Enchantments')
+
+    if 'minecraft:stored_enchantments' in components_tag:
+        stored_component = components_tag['minecraft:stored_enchantments']
+        legacy['StoredEnchantments'] = _build_enchantment_list(stored_component, 'StoredEnchantments')
+
+    if 'minecraft:repair_cost' in components_tag:
+        legacy['RepairCost'] = nbtlib.TAG_Int(components_tag['minecraft:repair_cost'].value)
+
+    if 'minecraft:damage' in components_tag:
+        legacy['Damage'] = nbtlib.TAG_Int(components_tag['minecraft:damage'].value)
+
+    if 'minecraft:fireworks' in components_tag:
+        fireworks = convert_fireworks_component(components_tag['minecraft:fireworks'])
+        if len(fireworks) > 0:
+            legacy['Fireworks'] = fireworks
+
+    if 'minecraft:container' in components_tag:
+        legacy['BlockEntityTag'] = convert_container_component(components_tag['minecraft:container'])
+
+    return legacy
+
+
+def convert_container_component(container_list):
+    block_entity_tag = nbtlib.TAG_Compound()
+    items_list = nbtlib.TAG_List(type=nbtlib.TAG_Compound, name='Items')
+    for entry in container_list:
+        slot_value = entry['slot'].value
+        normalized = normalize_item_tag(entry['item'], slot=slot_value)
+        items_list.append(normalized)
+    block_entity_tag['Items'] = items_list
+    return block_entity_tag
 
 
 def serialize_enchantments(enchantments_tag):
@@ -441,7 +570,7 @@ def serialize_meta_item(meta_item_tag, meta_type='UNSPECIFIC', internal_tag=None
         internal.append(internal_tag)
     if len(internal) > 0:
         with io.BytesIO() as out:
-            internal_nbt = nbt.nbt.NBTFile()
+            internal_nbt = nbtlib.NBTFile()
             internal_nbt.tags = internal
             internal_nbt.write_file(fileobj=out)
             meta['internal'] = base64.b64encode(out.getvalue()).decode('utf-8')
@@ -545,6 +674,7 @@ def get_item_meta(item_type, meta_item_tag):
 
 
 def serialize_item_stack(item_tag):
+    item_tag = normalize_item_tag(item_tag)
     # https://hub.spigotmc.org/stash/projects/SPIGOT/repos/bukkit/browse/src/main/java/org/bukkit/inventory/ItemStack.java#466
     item_data = {
         '==': 'org.bukkit.inventory.ItemStack',
@@ -566,6 +696,12 @@ def serialize_item_stack(item_tag):
 def serialize_player_nbt(player_nbt, mv_world):
     # https://github.com/Multiverse/Multiverse-Inventories/blob/main/src/main/java/com/onarandombox/multiverseinventories/share/Sharables.java
     game_mode = GAME_MODES[player_nbt['playerGameType'].value]
+
+    def valuestr_or(default, *names):
+        for name in names:
+            if name in player_nbt:
+                return player_nbt[name].valuestr()
+        return default
 
     # Build default empty json structure
     json_data = {
@@ -593,6 +729,20 @@ def serialize_player_nbt(player_nbt, mv_world):
         else:
             json_data[game_mode]['inventoryContents'][str(slot)] = serialize_item_stack(tag)
 
+    if 'equipment' in player_nbt:
+        equipment = player_nbt['equipment']
+        armor_slot_map = {
+            'feet': '0',
+            'legs': '1',
+            'chest': '2',
+            'head': '3',
+        }
+        for key, idx in armor_slot_map.items():
+            if key in equipment:
+                json_data[game_mode]['armorContents'][idx] = serialize_item_stack(equipment[key])
+        if 'off_hand' in equipment:
+            json_data[game_mode]['offHandItem'] = serialize_item_stack(equipment['off_hand'])
+
     # Parse Ender chest
     for tag in player_nbt['EnderItems']:
         json_data[game_mode]['enderChestContents'][str(tag['Slot'].value)] = serialize_item_stack(tag)
@@ -615,15 +765,41 @@ def serialize_player_nbt(player_nbt, mv_world):
     }
 
     # Parse spawn location
-    json_data[game_mode]['bedSpawnLocation'] = {
-        '==': 'org.bukkit.Location',
-        'world': mv_world + dimensions[player_nbt['SpawnDimension'].value],
-        'x': player_nbt['SpawnX'].value,
-        'y': player_nbt['SpawnY'].value,
-        'z': player_nbt['SpawnZ'].value,
-        'pitch': 0,
-        'yaw': player_nbt['SpawnAngle'].value
-    }
+    spawn_location = None
+    if {'SpawnDimension', 'SpawnX', 'SpawnY', 'SpawnZ', 'SpawnAngle'}.issubset(player_nbt.keys()):
+        spawn_location = {
+            '==': 'org.bukkit.Location',
+            'world': mv_world + dimensions[player_nbt['SpawnDimension'].value],
+            'x': player_nbt['SpawnX'].value,
+            'y': player_nbt['SpawnY'].value,
+            'z': player_nbt['SpawnZ'].value,
+            'pitch': 0,
+            'yaw': player_nbt['SpawnAngle'].value
+        }
+    elif 'respawn' in player_nbt:
+        respawn = player_nbt['respawn']
+        respawn_world = respawn['dimension'].value if 'dimension' in respawn else 'minecraft:overworld'
+        respawn_pos = list(respawn['pos']) if 'pos' in respawn else [0, 0, 0]
+        spawn_location = {
+            '==': 'org.bukkit.Location',
+            'world': mv_world + dimensions.get(respawn_world, ''),
+            'x': respawn_pos[0],
+            'y': respawn_pos[1],
+            'z': respawn_pos[2],
+            'pitch': respawn['pitch'].value if 'pitch' in respawn else 0,
+            'yaw': respawn['yaw'].value if 'yaw' in respawn else 0,
+        }
+    if spawn_location is None:
+        spawn_location = {
+            '==': 'org.bukkit.Location',
+            'world': json_data[game_mode]['lastLocation']['world'],
+            'x': json_data[game_mode]['lastLocation']['x'],
+            'y': json_data[game_mode]['lastLocation']['y'],
+            'z': json_data[game_mode]['lastLocation']['z'],
+            'pitch': 0,
+            'yaw': json_data[game_mode]['lastLocation']['yaw'],
+        }
+    json_data[game_mode]['bedSpawnLocation'] = spawn_location
 
     # Parse potion effects
     if 'ActiveEffects' in player_nbt:
@@ -631,24 +807,29 @@ def serialize_player_nbt(player_nbt, mv_world):
 
     # Parse stats
     json_data[game_mode]['stats'] = {
-        'ex': player_nbt['foodExhaustionLevel'].valuestr(),  # Float
+        'ex': valuestr_or('0', 'foodExhaustionLevel'),  # Float
         'ma': '300',  # Integer (max air)
-        'fl': player_nbt['foodLevel'].valuestr(),  # Integer
-        'el': player_nbt['XpLevel'].valuestr(),  # Integer
-        'xp': player_nbt['XpP'].valuestr(),  # Float
-        'hp': player_nbt['Health'].valuestr(),  # Double
-        'txp': player_nbt['XpTotal'].valuestr(),  # Integer
-        'fd': player_nbt['FallDistance'].valuestr(),  # Float
-        'ft': player_nbt['Fire'].valuestr(),  # Integer
-        'sa': player_nbt['foodSaturationLevel'].valuestr(),  # Float
-        'ra': player_nbt['Air'].valuestr(),  # Integer
+        'fl': valuestr_or('0', 'foodLevel'),  # Integer
+        'el': valuestr_or('0', 'XpLevel'),  # Integer
+        'xp': valuestr_or('0', 'XpP'),  # Float
+        'hp': valuestr_or('0', 'Health'),  # Double
+        'txp': valuestr_or('0', 'XpTotal'),  # Integer
+        'fd': valuestr_or('0', 'FallDistance', 'fall_distance'),  # Float
+        'ft': valuestr_or('0', 'Fire'),  # Integer
+        'sa': valuestr_or('0', 'foodSaturationLevel'),  # Float
+        'ra': valuestr_or('0', 'Air'),  # Integer
     }
 
     return json_data
 
 
 def main(player_filename, mv_world='world'):
-    player = nbt.nbt.NBTFile(player_filename, 'rb')
+    player = nbtlib.NBTFile(player_filename, 'rb')
+
+    global BUKKIT_VERSION
+    data_version = player.get('DataVersion')
+    if data_version is not None:
+        BUKKIT_VERSION = data_version.value
 
     json_data = serialize_player_nbt(player, mv_world)
 
@@ -660,12 +841,18 @@ def main(player_filename, mv_world='world'):
 
 
 def test():
-    player = nbt.nbt.NBTFile('76121406-7ac6-32c8-90ee-2368a675ad02.dat', 'rb')
+    player = nbtlib.NBTFile('76121406-7ac6-32c8-90ee-2368a675ad02.dat', 'rb')
     result = serialize_player_nbt(player, 'world')
     print(result)
 
 
+def cli():
+    parser = argparse.ArgumentParser(description='Convert player data NBT into Multiverse JSON format.')
+    parser.add_argument('player_dat', help='Path to the player .dat file')
+    parser.add_argument('mv_world', nargs='?', default='world', help='Multiverse world name (default: world)')
+    args = parser.parse_args()
+    main(args.player_dat, args.mv_world)
+
+
 if __name__ == '__main__':
-    # test()
-    world = sys.argv[2] if len(sys.argv) > 2 else 'world'
-    main(sys.argv[1], world)
+    cli()
