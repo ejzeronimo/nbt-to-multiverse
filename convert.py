@@ -89,6 +89,30 @@ def convert_fireworks_component(component_tag):
     return fireworks
 
 
+def _dimension_suffix(dimension, fallback=''):
+    mapping = {
+        'minecraft:overworld': '',
+        'minecraft:the_nether': '_nether',
+        'minecraft:the_end': '_the_end',
+        'minecraft:overworld/caves': '',
+    }
+    numeric_map = {
+        0: '',
+        -1: '_nether',
+        1: '_the_end',
+    }
+
+    if isinstance(dimension, nbtlib.TAG_String):
+        return mapping.get(dimension.value, fallback)
+    if isinstance(dimension, nbtlib.TAG_Int):
+        return numeric_map.get(dimension.value, fallback)
+    if isinstance(dimension, str):
+        return mapping.get(dimension, fallback)
+    if isinstance(dimension, int):
+        return numeric_map.get(dimension, fallback)
+    return fallback
+
+
 def normalize_item_tag(item_tag, slot=None):
     normalized = nbtlib.TAG_Compound()
 
@@ -716,6 +740,8 @@ def serialize_player_nbt(player_nbt, mv_world):
         return default
 
     # Build default empty json structure
+    dimension_suffix = _dimension_suffix(player_nbt['Dimension'])
+
     json_data = {
         output_game_mode: {
             'inventoryContents': {},
@@ -759,16 +785,10 @@ def serialize_player_nbt(player_nbt, mv_world):
     for tag in player_nbt['EnderItems']:
         json_data[output_game_mode]['enderChestContents'][str(tag['Slot'].value)] = serialize_item_stack(tag)
 
-    dimensions = {
-        'minecraft:overworld': '',
-        'minecraft:the_nether': '_nether',
-        'minecraft:the_end': '_the_end',
-    }
-
     # Parse last location
     json_data[output_game_mode]['lastLocation'] = {
         '==': 'org.bukkit.Location',
-        'world': mv_world + dimensions[player_nbt['Dimension'].value],
+        'world': mv_world + dimension_suffix,
         'x': player_nbt['Pos'][0].value,
         'y': player_nbt['Pos'][1].value,
         'z': player_nbt['Pos'][2].value,
@@ -781,7 +801,7 @@ def serialize_player_nbt(player_nbt, mv_world):
     if {'SpawnDimension', 'SpawnX', 'SpawnY', 'SpawnZ', 'SpawnAngle'}.issubset(player_nbt.keys()):
         spawn_location = {
             '==': 'org.bukkit.Location',
-            'world': mv_world + dimensions[player_nbt['SpawnDimension'].value],
+            'world': mv_world + _dimension_suffix(player_nbt['SpawnDimension']),
             'x': player_nbt['SpawnX'].value,
             'y': player_nbt['SpawnY'].value,
             'z': player_nbt['SpawnZ'].value,
@@ -790,11 +810,12 @@ def serialize_player_nbt(player_nbt, mv_world):
         }
     elif 'respawn' in player_nbt:
         respawn = player_nbt['respawn']
-        respawn_world = respawn['dimension'].value if 'dimension' in respawn else 'minecraft:overworld'
+        respawn_dimension = respawn['dimension'] if 'dimension' in respawn else 'minecraft:overworld'
+        respawn_suffix = _dimension_suffix(respawn_dimension)
         respawn_pos = list(respawn['pos']) if 'pos' in respawn else [0, 0, 0]
         spawn_location = {
             '==': 'org.bukkit.Location',
-            'world': mv_world + dimensions.get(respawn_world, ''),
+            'world': mv_world + respawn_suffix,
             'x': respawn_pos[0],
             'y': respawn_pos[1],
             'z': respawn_pos[2],
