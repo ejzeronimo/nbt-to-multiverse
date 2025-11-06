@@ -1,7 +1,9 @@
 import argparse
+import base64
 import io
 import json
-import base64
+from pathlib import Path
+import uuid
 
 from nbt import nbt as nbtlib
 
@@ -10,7 +12,8 @@ from nbt import nbt as nbtlib
 # https://hub.spigotmc.org/stash/projects/SPIGOT/repos/craftbukkit/
 # https://github.com/Multiverse/Multiverse-Inventories/
 
-BUKKIT_VERSION = 4556
+DEFAULT_BUKKIT_VERSION = 4556
+BUKKIT_VERSION = DEFAULT_BUKKIT_VERSION
 GAME_MODES = ('SURVIVAL', 'CREATIVE', 'ADVENTURE', 'SPECTATOR')
 
 # https://hub.spigotmc.org/stash/projects/SPIGOT/repos/craftbukkit/browse/src/main/java/org/bukkit/craftbukkit/inventory/CraftMetaItem.java#1394
@@ -151,13 +154,22 @@ def components_to_legacy_tag(components_tag, item_id=None):
             legacy['Fireworks'] = fireworks
 
     if 'minecraft:container' in components_tag:
-        legacy['BlockEntityTag'] = convert_container_component(components_tag['minecraft:container'])
+        legacy['BlockEntityTag'] = convert_container_component(components_tag['minecraft:container'], item_id)
 
     return legacy
 
 
-def convert_container_component(container_list):
+def _container_block_entity_id(item_id):
+    if not item_id:
+        return 'minecraft:chest'
+    if item_id.endswith('_shulker_box'):
+        return 'minecraft:shulker_box'
+    return item_id
+
+
+def convert_container_component(container_list, item_id=None):
     block_entity_tag = nbtlib.TAG_Compound()
+    block_entity_tag['id'] = nbtlib.TAG_String(_container_block_entity_id(item_id))
     items_list = nbtlib.TAG_List(type=nbtlib.TAG_Compound, name='Items')
     for entry in container_list:
         slot_value = entry['slot'].value
@@ -823,21 +835,71 @@ def serialize_player_nbt(player_nbt, mv_world):
     return json_data
 
 
-def main(player_filename, mv_world='world'):
-    player = nbtlib.NBTFile(player_filename, 'rb')
+def _uuid_from_player(player):
+    if 'UUID' in player:
+        value = 0
+        for part in player['UUID']:
+            value = (value << 32) | (part & 0xffffffff)
+        return str(uuid.UUID(int=value))
+    if 'UUIDMost' in player and 'UUIDLeast' in player:
+        most = player['UUIDMost'].value & ((1 << 64) - 1)
+        least = player['UUIDLeast'].value & ((1 << 64) - 1)
+        combined = (most << 64) | least
+        return str(uuid.UUID(int=combined))
+    return None
+
+
+def convert_player_file(player_filename, mv_world='world', output_dir=None):
+    player_path = Path(player_filename)
+    player = nbtlib.NBTFile(str(player_path), 'rb')
 
     global BUKKIT_VERSION
+    previous_version = BUKKIT_VERSION
     data_version = player.get('DataVersion')
     if data_version is not None:
         BUKKIT_VERSION = data_version.value
+    else:
+        BUKKIT_VERSION = DEFAULT_BUKKIT_VERSION
 
-    json_data = serialize_player_nbt(player, mv_world)
+    try:
+        json_data = serialize_player_nbt(player, mv_world)
+    finally:
+        BUKKIT_VERSION = previous_version
 
-    # Get player name
-    name = player['bukkit']['lastKnownName'].value
+    name = None
+    if 'bukkit' in player and 'lastKnownName' in player['bukkit']:
+        name = player['bukkit']['lastKnownName'].value
 
-    with open(name + '.json', 'w') as out_file:
-        json.dump(json_data, out_file)
+    player_uuid = _uuid_from_player(player)
+
+    output_base = Path(output_dir) if output_dir else player_path.parent
+    output_base.mkdir(parents=True, exist_ok=True)
+
+    outputs = {}
+    if name:
+        name_path = output_base / f"{name}.json"
+        with name_path.open('w') as out_file:
+            json.dump(json_data, out_file)
+        outputs['name_path'] = name_path
+
+    if player_uuid:
+        uuid_path = output_base / f"{player_uuid}.json"
+        with uuid_path.open('w') as out_file:
+            json.dump(json_data, out_file)
+        outputs['uuid_path'] = uuid_path
+
+    outputs['source'] = player_path
+    outputs['world'] = mv_world
+    outputs['uuid'] = player_uuid
+    outputs['name'] = name
+    return outputs
+
+
+def main(player_filenames, mv_world='world', output_dir=None):
+    results = []
+    for filename in player_filenames:
+        results.append(convert_player_file(filename, mv_world, output_dir))
+    return results
 
 
 def test():
@@ -848,10 +910,19 @@ def test():
 
 def cli():
     parser = argparse.ArgumentParser(description='Convert player data NBT into Multiverse JSON format.')
-    parser.add_argument('player_dat', help='Path to the player .dat file')
-    parser.add_argument('mv_world', nargs='?', default='world', help='Multiverse world name (default: world)')
+    parser.add_argument('player_dat', nargs='+', help='Path(s) to player .dat files')
+    parser.add_argument('-w', '--world', default='world', help='Multiverse world name (default: world)')
+    parser.add_argument('-o', '--output-dir', help='Directory to place generated JSON files')
     args = parser.parse_args()
-    main(args.player_dat, args.mv_world)
+    results = main(args.player_dat, args.world, args.output_dir)
+    for result in results:
+        created = []
+        if result.get('name_path'):
+            created.append(result['name_path'].name)
+        if result.get('uuid_path'):
+            created.append(result['uuid_path'].name)
+        created_str = ', '.join(created) if created else 'no files'
+        print(f"Converted {result['source']} -> {created_str}")
 
 
 if __name__ == '__main__':
